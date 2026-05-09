@@ -1,0 +1,12 @@
+{
+    "name": "the-hub-root",
+    "version": "1.0.0",
+    "scripts": {
+      "dev": "concurrently \"npm run server\" \"npm run client\"",
+      "server": "cd server && node index.js",
+      "client": "cd client && npm start"
+    },
+    "devDependencies": {
+      "concurrently": "^8.2.2"
+    }
+  }
