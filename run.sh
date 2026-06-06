@@ -29,6 +29,8 @@ if [[ "$DO_RM" -eq 1 ]]; then
 fi
 
 if [[ "$DO_NPM" -eq 1 ]]; then
+  echo "[2/5] Installing root dependencies..."
+  (cd "$ROOT_DIR" && npm install)
   echo "[2/5] Installing server dependencies..."
   (cd "$SERVER_DIR" && npm install)
   echo "[3/5] Installing client dependencies..."
