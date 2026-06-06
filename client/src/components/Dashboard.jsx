@@ -197,7 +197,17 @@ export default function DashboardShell({
           >
             {m.username}
           </span>
-          <span>{m.content}</span>
+          <span
+            style={{
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+              overflowWrap: 'break-word',
+              display: 'inline-block',
+              maxWidth: '100%'
+            }}
+          >
+            {m.content}
+          </span>
         </div>
       ))}
       <div ref={chatEndRef} />
