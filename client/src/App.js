@@ -18,23 +18,111 @@ const socket = io(serverUrl, {
 });
 
 const GlobalStyles = createGlobalStyle`
-  ${styleReset}
+${styleReset}
 `;
 
+
+
 function App() {
+
+  const SOUND_MAP = {
+    airhorn: 'airhorn.mp3',
+    america_ya: 'america_ya.mp3',
+    bahbuy: 'bahbuy.mp3',
+    ello: 'ello.mp3',
+    fah: 'fah.mp3',
+    gya: 'gya.mp3',
+    hahaha: 'hahaha.mp3',
+    i: 'i.mp3',
+    nasty_fart: 'nasty_fart.mp3',
+    nou: 'nou.mp3',
+    og_fart: 'og_fart.mp3',
+    onou: 'onou.mp3'
+  };
+
+  const soundCacheRef = useRef({});
+
+  // ...existing code...
+  const playLocalSound = async (soundType) => {
+    try {
+      const filename = SOUND_MAP[soundType];
+      if (!filename) {
+        console.warn('Unknown sound type:', soundType);
+        return;
+      }
+
+      const candidates = [
+        `${serverUrl}/sounds/${filename}`,
+        `${window.location.origin}/sounds/${filename}`
+      ];
+
+      let src = null;
+      for (const c of candidates) {
+        try {
+          const res = await fetch(c, { method: 'HEAD' });
+          if (res.ok) { src = c; break; }
+        } catch (e) {
+          // ignore, try next
+        }
+      }
+
+      if (!src) {
+        console.warn('[sound] file not found on candidates:', filename, candidates);
+        return;
+      }
+
+      console.debug('[sound] playing from', src);
+      let baseAudio = soundCacheRef.current[src];
+      if (!baseAudio) {
+        baseAudio = new Audio(src);
+        baseAudio.preload = 'auto';
+        soundCacheRef.current[src] = baseAudio;
+      }
+
+      const audio = baseAudio.cloneNode();
+      audio.volume = 1.0;
+      audio.play().catch((err) => {
+        console.warn('playLocalSound play() failed', err);
+      });
+    } catch (err) {
+      console.error('playLocalSound error', err);
+    }
+  };
+  // ...existing code...
+
   const [user, setUser] = useState(() => {
     const savedUser = localStorage.getItem('hub_user');
     return savedUser ? JSON.parse(savedUser) : null;
   });
 
+  // ...existing code...
   const [currentRoom, setCurrentRoom] = useState(() => {
     const savedRoom = localStorage.getItem('hub_current_room');
     return savedRoom ? JSON.parse(savedRoom) : null;
   });
 
+  // persist current room across reloads
+  useEffect(() => {
+    try {
+      if (currentRoom) {
+        localStorage.setItem('hub_current_room', JSON.stringify(currentRoom));
+      } else {
+        localStorage.removeItem('hub_current_room');
+      }
+    } catch (e) {
+      console.warn('Could not persist currentRoom', e);
+    }
+  }, [currentRoom]);
+
+  // ...existing code...
+
   const [activeUsers, setActiveUsers] = useState([]);
   const [messages, setMessages] = useState([]);
   const videoRef = useRef(null);
+
+  const ignoreSyncRef = useRef(false); // NEW: Blocks the infinite echo loop
+
+
 
   // NEW MEDIA STATES
   const [roomMedia, setRoomMedia] = useState([]);
@@ -44,12 +132,9 @@ function App() {
   const remoteApplyingRef = useRef(false);
   const lastAppliedRef = useRef({ action: null, time: null, ts: 0 });
 
-  // helper to set video time + play/pause reliably (uses videoRef above)
-  // sourceAction: optional string 'play'|'pause'|'seek' to record intention precisely
-// ...existing code above...
-  // helper to set video time + play/pause reliably (uses videoRef above)
-  // sourceAction: optional string 'play'|'pause'|'seek' to record intention precisely
-  // ...existing code...
+
+
+
   // helper to set video time + play/pause reliably (uses videoRef above)
   // sourceAction: optional string 'play'|'pause'|'seek' to record intention precisely
   const applyPlaybackToVideo = (isPlaying, targetTime, sourceAction = null) => {
@@ -59,15 +144,14 @@ function App() {
     const recordApplied = (action, time) => {
       lastAppliedRef.current = {
         action,
-        time: typeof time === 'number' ? Math.round(time * 10) / 10 : null, // 0.1s precision
+        time: typeof time === 'number' ? Math.round(time * 10) / 10 : null,
         ts: Date.now(),
       };
     };
 
-    // mark we're applying remote change so native handlers ignore it
     remoteApplyingRef.current = true;
+
     const clearApplying = () => {
-      // short delay to allow native events to fire and be ignored
       setTimeout(() => {
         remoteApplyingRef.current = false;
       }, 350);
@@ -76,7 +160,6 @@ function App() {
     const doSet = () => {
       try {
         if (typeof targetTime === 'number' && !Number.isNaN(targetTime)) {
-          // NEW: only snap if difference crosses 1.0s threshold to avoid small corrections
           const cur = typeof v.currentTime === 'number' ? v.currentTime : 0;
           if (Math.abs(cur - targetTime) > 1.0) {
             v.currentTime = Math.max(0, targetTime);
@@ -89,7 +172,6 @@ function App() {
       const action = sourceAction || (isPlaying ? 'play' : 'pause');
       recordApplied(action, targetTime);
 
-      // if action is a seek from server, do NOT toggle play state here; let native events handle it
       if (sourceAction === 'seek') {
         clearApplying();
         return;
@@ -108,8 +190,36 @@ function App() {
     if (v.readyState >= 1) doSet();
     else v.addEventListener('loadedmetadata', doSet, { once: true });
   };
-// ...existing code...
-// ...existing code below...
+  // ...existing code...
+  // ...existing code below...
+
+
+  useEffect(() => {
+    if (!user || !currentRoom) return;
+
+    const handlePlaySound = (data) => {
+      if (!data) return;
+
+      const msgRoomId = data.roomId ?? null;
+      if (
+        currentRoom &&
+        currentRoom.id != null &&
+        String(msgRoomId) !== String(currentRoom.id)
+      ) {
+        return;
+      }
+
+      const { soundType } = data;
+      console.log(`[Soundboard] Remote triggered: ${soundType}`);
+      playLocalSound(soundType);
+    };
+
+    socket.on('play-sound', handlePlaySound);
+
+    return () => {
+      socket.off('play-sound', handlePlaySound);
+    };
+  }, [user, currentRoom]);
 
   // Keep active users list in sync with room
   useEffect(() => {
@@ -128,7 +238,7 @@ function App() {
     };
   }, [user, currentRoom]);
 
- 
+
   // Attach listeners to the video element so native/fullscreen controls still sync
   useEffect(() => {
     const v = videoRef.current;
@@ -189,11 +299,11 @@ function App() {
       document.removeEventListener('fullscreenchange', onFullscreenChange);
     };
   }, [currentRoom, activeMedia]);
-// ...existing code...
+  // ...existing code...
 
 
 
-// ...existing code...
+  // ...existing code...
   // clock sync & ordering
   const serverOffsetRef = useRef(0); // serverClock - clientClock (ms)
   const lastSeqRef = useRef(0);
@@ -256,21 +366,17 @@ function App() {
       if (!data || data.roomId !== currentRoom?.id) return;
       const { action, time, mediaUrl, isRemoteEvent, init, ts: serverTs, seq } = data;
 
-      // sequence check: ignore older messages
       if (typeof seq === 'number') {
         if (seq <= (lastSeqRef.current || 0)) return;
         lastSeqRef.current = seq;
       }
 
-      // ensure player's source matches the room media first
       if (mediaUrl && mediaUrl !== activeMedia) {
         setActiveMedia(mediaUrl);
       }
 
       if (action === 'change-media') return;
 
-      // compute corrected targetTime using server timestamp + client offset
-      // serverTs is ms at server when `time` was measured. clientNow + offset ≈ serverNow
       const clientNow = Date.now();
       const offset = serverOffsetRef.current || 0;
       const serverNowApprox = clientNow + offset;
@@ -290,7 +396,6 @@ function App() {
         applyPlaybackToVideo(false, correctedTime, 'pause');
       } else if (action === 'seek') {
         const playing = !(videoRef.current?.paused);
-        // for seeks, pass 'seek' so helper won't toggle play/pause
         applyPlaybackToVideo(playing, correctedTime, 'seek');
       }
     };
@@ -449,6 +554,8 @@ function App() {
     }
   };
 
+
+
   // UPLOAD MEDIA HANDLER
   const handleUploadMedia = async (file) => {
     if (!currentRoom || !file) return;
@@ -493,14 +600,9 @@ function App() {
 
   // PLAYBACK SYNC EMITTER (used by UI buttons)
   const emitPlayback = (action) => {
-    if (!currentRoom) return;
+    if (!currentRoom || remoteApplyingRef.current) return;
     const time = videoRef.current ? videoRef.current.currentTime : 0;
-    socket.emit('playback-action', {
-      roomId: currentRoom.id,
-      action,
-      time,
-      isRemoteEvent: false,
-    });
+    socket.emit('playback-action', { roomId: currentRoom.id, action, time, isRemoteEvent: false });
   };
 
   const sendMsg = (content) => {
@@ -521,11 +623,15 @@ function App() {
     });
   };
 
+
   const playSound = (soundType) => {
     if (!currentRoom) return;
+
     console.log(`[Soundboard] Local trigger: ${soundType}`);
+    playLocalSound(soundType);
     socket.emit('play-sound', { roomId: currentRoom.id, soundType });
   };
+
 
   // UNAUTHENTICATED VIEW
   if (!user) {
