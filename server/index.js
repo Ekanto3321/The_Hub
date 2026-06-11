@@ -1,4 +1,3 @@
-// ...existing code...
 const express = require('express');
 const cors = require('cors');
 const { PrismaClient } = require('@prisma/client');
@@ -8,25 +7,133 @@ const roomRoutes = require('./routes/room');
 const path = require('path');
 const http = require('http');
 const { Server } = require('socket.io');
+const multer = require('multer');
+const { exec } = require('child_process');
+const fs = require('fs');
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: '*' } });
- // Tracks playback state per room: { mediaUrl, time, isPlaying, lastUpdate }
-// ...existing code...
 
+// middleware
 app.use(cors());
 app.use(express.json());
 app.use('/auth', authRoutes);
 app.use('/rooms', roomRoutes);
 
 // Serve uploaded media files publicly via HTTP
-app.use('/media', express.static(path.join(__dirname, 'uploads')));
+const uploadsDir = path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+app.use('/media', express.static(uploadsDir));
 
-// ...existing code...
-const roomUsers = {}; // Tracks users in each room
-const roomPlayback = {}; // Tracks playback state per room: { mediaUrl, time, isPlaying, lastUpdate }
-// ...existing code...
+// Serve sounds placed under client/sounds at /sounds
+app.use('/sounds', express.static(path.join(__dirname, '..', 'client', 'sounds')));
+
+// multer for file uploads
+const upload = multer({ dest: uploadsDir });
+
+// Helpers to probe media info
+const ffprobeCommand = (file, args) =>
+  new Promise((resolve) => {
+    // args should include -select_streams and -show_entries parts as needed
+    const cmd = `ffprobe -v error ${args} -of default=noprint_wrappers=1:nokey=1 "${file}"`;
+    exec(cmd, (err, stdout) => {
+      if (err) return resolve(null);
+      resolve(stdout ? stdout.trim() : null);
+    });
+  });
+
+const getVideoCodec = (file) => ffprobeCommand(file, '-select_streams v:0 -show_entries stream=codec_name');
+const getAudioCodec = (file) => ffprobeCommand(file, '-select_streams a:0 -show_entries stream=codec_name');
+const getFormatName = (file) => ffprobeCommand(file, '-show_entries format=format_name');
+
+// decide if a file is already web-friendly: h264 video + aac audio + common container
+const isWebFriendly = async (filepath) => {
+  try {
+    const [vCodec, aCodec, fmtRaw] = await Promise.all([
+      getVideoCodec(filepath),
+      getAudioCodec(filepath),
+      getFormatName(filepath),
+    ]);
+    if (!vCodec || !aCodec || !fmtRaw) return false;
+    const video = vCodec.split('\n')[0];
+    const audio = aCodec.split('\n')[0];
+    const fmt = fmtRaw.split(',')[0];
+    return video === 'h264' && audio === 'aac' && (fmt.includes('mp4') || fmt.includes('mov') || fmt.includes('matroska') || fmt.includes('webm'));
+  } catch (e) {
+    return false;
+  }
+};
+
+// upload & (optional) transcode endpoint
+// POST /upload-media?roomId=<roomId>&title=<title>
+// field name: file
+app.post('/upload-media', upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ ok: false, error: 'no-file' });
+
+    const roomId = req.query.roomId;
+    const title = req.query.title || req.file.originalname || req.file.filename;
+    const uploadedPath = req.file.path;
+    const origName = req.file.originalname || req.file.filename;
+
+    // check for ffprobe presence, but proceed gracefully if missing
+    exec('ffprobe -version', async (probeErr) => {
+      let needsTranscode = true;
+      if (!probeErr) {
+        try {
+          needsTranscode = !(await isWebFriendly(uploadedPath));
+        } catch (e) {
+          needsTranscode = true;
+        }
+      } else {
+        // no ffprobe => we conservatively transcode
+        needsTranscode = true;
+      }
+
+      if (!needsTranscode) {
+        // ready as-is
+        const publicPath = `/media/${path.basename(uploadedPath)}`;
+        if (roomId) {
+          io.to(roomId).emit('media-ready', { roomId, mediaUrl: publicPath, title, origName });
+        }
+        return res.json({ ok: true, status: 'ready', mediaUrl: publicPath, title });
+      }
+
+      // start async transcoding; reply immediately indicating work in progress
+      res.json({ ok: true, status: 'transcoding', message: 'transcoding started' });
+
+      const outName = `${path.parse(req.file.filename).name}-transcoded.mp4`;
+      const outPath = path.join(uploadsDir, outName);
+      const script = path.join(__dirname, '..', 'transcoder', 'format_video.sh');
+
+      const finish = (err) => {
+        if (err) {
+          console.error('transcode failed', err);
+          return;
+        }
+        try { fs.unlinkSync(uploadedPath); } catch (e) {}
+        const publicPath = `/media/${path.basename(outPath)}`;
+        if (roomId) io.to(roomId).emit('media-ready', { roomId, mediaUrl: publicPath, title, origName });
+      };
+
+      if (!fs.existsSync(script)) {
+        // fallback to plain ffmpeg transcode
+        const cmd = `ffmpeg -y -i "${uploadedPath}" -c:v libx264 -pix_fmt yuv420p -c:a aac -movflags +faststart "${outPath}"`;
+        exec(cmd, (err, stdout, stderr) => finish(err));
+      } else {
+        exec(`bash "${script}" "${uploadedPath}" "${outPath}"`, (err) => finish(err));
+      }
+    });
+  } catch (err) {
+    console.error('upload-media error', err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// room / playback state
+const roomUsers = {}; // { roomId: [ { username, socketId } ] }
+const roomPlayback = {}; // { roomId: { mediaUrl, time, isPlaying, lastUpdate } }
 
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
@@ -54,13 +161,10 @@ io.on('connection', (socket) => {
       roomUsers[roomId].push({ username, socketId: socket.id });
     }
 
-    // Notify room of current members (no need to include roomId here, delivered only to that room)
-    io.to(roomId).emit(
-      'room-state',
-      roomUsers[roomId].map(u => ({ username: u.username }))
-    );
+    // Notify room of current members
+    io.to(roomId).emit('room-state', roomUsers[roomId].map(u => ({ username: u.username })));
 
-    // Inform others that a user joined (include roomId)
+    // Inform others that a user joined
     socket.to(roomId).emit('user-joined', { roomId, username });
 
     // Send current playback state (if any) to the joining socket so it can catch up
@@ -92,15 +196,12 @@ io.on('connection', (socket) => {
     try {
       const { roomId, action, time, mediaUrl, isRemoteEvent } = data;
       if (!roomId) return;
-      // Ensure socket is in the same room before broadcasting
       if (socket.roomId !== roomId) {
         console.warn(`Ignoring playback-action from ${socket.id} for room ${roomId} (socket in ${socket.roomId})`);
         return;
       }
 
-      // Update roomPlayback state
       if (!roomPlayback[roomId]) roomPlayback[roomId] = { mediaUrl: null, time: 0, isPlaying: false, lastUpdate: Date.now() };
-
       const pb = roomPlayback[roomId];
 
       if (action === 'change-media') {
@@ -122,7 +223,7 @@ io.on('connection', (socket) => {
         pb.lastUpdate = Date.now();
       }
 
-      // Broadcast to others in the room (exclude sender) and include roomId
+      // Broadcast to others in the room (exclude sender)
       socket.to(roomId).emit('sync-state', { roomId, action, time, mediaUrl: pb.mediaUrl, isRemoteEvent: true });
     } catch (err) {
       console.error('playback-action error', err);
@@ -140,19 +241,18 @@ io.on('connection', (socket) => {
 
       console.log(`[send-message] from ${socket.id} -> room ${roomId}:`, { username, content });
 
-      // Save to DB if possible (don't include unknown fields)
+      // Save to DB if possible
       if (roomId && userId) {
         await prisma.message.create({
           data: {
             content,
             roomId,
             userId,
-            // createdAt handled by Prisma schema
           },
         });
       }
 
-      // Emit to the room (include roomId and a time)
+      // Emit to the room
       io.to(roomId).emit('chat-message', {
         roomId,
         username,
@@ -166,6 +266,7 @@ io.on('connection', (socket) => {
       if (typeof ack === 'function') ack({ ok: false, error: err.message });
     }
   });
+
   // SOUNDBOARD
   socket.on('play-sound', (data) => {
     try {
@@ -175,14 +276,13 @@ io.on('connection', (socket) => {
         console.warn(`Ignoring play-sound from ${socket.id} for room ${roomId} (socket in ${socket.roomId})`);
         return;
       }
-      // include roomId
       socket.to(roomId).emit('play-sound', { roomId, soundType });
     } catch (err) {
       console.error('play-sound error', err);
     }
   });
 
-  //persistent playback
+  // persistent playback request
   socket.on('request-playback', (roomId, cb) => {
     try {
       if (!roomId) {
@@ -195,7 +295,6 @@ io.on('connection', (socket) => {
         return;
       }
 
-      // compute effective time if playing
       let effectiveTime = pb.time || 0;
       if (pb.isPlaying && pb.lastUpdate) {
         effectiveTime += (Date.now() - pb.lastUpdate) / 1000;
@@ -228,4 +327,3 @@ io.on('connection', (socket) => {
 });
 
 server.listen(3001, () => console.log('Server running on port 3001'));
-// ...existing code...
