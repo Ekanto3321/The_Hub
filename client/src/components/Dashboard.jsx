@@ -2,6 +2,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Window, WindowHeader, WindowContent, Button, TextField, Select } from 'react95';
 import { RetroPlayer } from './RetroPlayer';
+import EmojiPicker from './EmojiPicker';
 
 
 const getNameColor = (name = '') => {
@@ -19,19 +20,20 @@ const getNameColor = (name = '') => {
   return colors[Math.abs(hash) % colors.length];
 };
 
-export default function DashboardShell({ 
-  userRooms = [], currentRoom, activeUsers = [], messages = [], 
-  
+export default function DashboardShell({
+  userRooms = [], currentRoom, activeUsers = [], messages = [],
+
   roomMedia = [], activeMedia, onUploadMedia, onSelectMedia, serverUrl, // NEW PROPS
   onSendMessage, onMakeRoom, onJoinRoom, onPlaySound, onLogout,
-  videoRef, onPlay, onPause, onSeeking 
+  videoRef, onPlay, onPause, onSeeking
 }) {
   const [msg, setMsg] = useState('');
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const chatEndRef = useRef(null);
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
-  
+
   const handleKeyDown = (e) => {
     e.stopPropagation();
     if (e.key === 'Enter') {
@@ -43,6 +45,27 @@ export default function DashboardShell({
     }
   };
 
+  const handleCopyRoomCode = async () => {
+    if (!currentRoom?.code) return;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(currentRoom.code);
+      } else {
+        const ta = document.createElement('textarea');
+        ta.value = currentRoom.code;
+        ta.style.position = 'fixed';
+        ta.style.left = '-9999px';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      }
+    } catch (err) {
+      console.error('Copy failed:', err);
+      alert('Could not copy room code.');
+    }
+  };
   const promptMakeRoom = () => {
     const name = prompt("Enter new room name:");
     if (name) onMakeRoom(name);
@@ -72,7 +95,7 @@ export default function DashboardShell({
           <span style={{ fontSize: '24px' }}>THE HUB</span>
           <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
             <Select
-              defaultValue=""
+              value={currentRoom?.code || ''}
               options={roomOptions}
               onChange={handleRoomSelect}
               style={{ width: '180px' }}
@@ -86,7 +109,7 @@ export default function DashboardShell({
       </Window>
 
       <div style={{ margin: '5px 0 0 0', display: 'grid', gridTemplateColumns: '2fr 1fr 2fr', gap: '3px', alignItems: 'start', width: '100%', boxSizing: 'border-box' }}>
-        
+
         {/* ADDED WRAPPER FOR LEFT COLUMN TO STACK ROOM INFO & MEDIA LIBRARY */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', width: '100%' }}>
           <Window style={{ width: '100%' }}>
@@ -95,8 +118,8 @@ export default function DashboardShell({
               {currentRoom ? (
                 <div style={{ marginBottom: '15px', background: '#e0e0e0', padding: '8px', border: '2px inset #fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <span style={{ fontSize: '14px' }}>Code: <b>{currentRoom.code}</b></span>
-                  <Button 
-                    onClick={() => navigator.clipboard.writeText(currentRoom.code)} 
+                  <Button
+                    onClick={handleCopyRoomCode}
                     style={{ height: '25px', fontSize: '12px' }}
                   >
                     Copy
@@ -115,7 +138,7 @@ export default function DashboardShell({
                 ))}
               </ul>
               <hr style={{ margin: '15px 0' }} />
-              
+
             </WindowContent>
           </Window>
 
@@ -134,20 +157,20 @@ export default function DashboardShell({
                 style={{ width: '100%', marginBottom: '10px' }}
               />
               <div style={{ display: 'flex', gap: '5px' }}>
-                <input 
-                  type="file" 
-                  id="media-upload" 
-                  style={{ display: 'none' }} 
+                <input
+                  type="file"
+                  id="media-upload"
+                  style={{ display: 'none' }}
                   onChange={(e) => {
-                    if(e.target.files[0]) onUploadMedia(e.target.files[0]);
+                    if (e.target.files[0]) onUploadMedia(e.target.files[0]);
                     e.target.value = ''; // reset input
-                  }} 
+                  }}
                   accept="video/mp4,video/webm"
                 />
                 <Button fullWidth disabled={!currentRoom}>NEXT VIDEO</Button>
-                <Button 
-                  fullWidth 
-                  disabled={!currentRoom} 
+                <Button
+                  fullWidth
+                  disabled={!currentRoom}
                   onClick={() => document.getElementById('media-upload').click()}
                 >
                   UPLOAD MEDIA
@@ -159,98 +182,165 @@ export default function DashboardShell({
 
         <Window>
           {/* PASSED SRC TO RETROPLAYER */}
-          <RetroPlayer 
-            key={`player-${currentRoom?.id || 'none'}-${activeMedia || 'no-media'}`} 
-            videoRef={videoRef} 
-            onPlay={onPlay} 
-            onPause={onPause} 
-            onSeeking={onSeeking} 
+          <RetroPlayer
+            key={`player-${currentRoom?.id || 'none'}-${activeMedia || 'no-media'}`}
+            videoRef={videoRef}
+            onPlay={onPlay}
+            onPause={onPause}
+            onSeeking={onSeeking}
             src={activeMedia ? `${serverUrl}${activeMedia}` : null}
           />
         </Window>
 
         {/* ... Rest of your Dashboard is completely untouched */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', width: '100%' }}>
-          
-        <Window style={{ width: '100%' }}>
-  <WindowHeader>CHAT</WindowHeader>
-  <WindowContent style={{ height: '400px', display: 'flex', flexDirection: 'column' }}>
-    <div
-      style={{
-        flex: 1,
-        overflowY: 'auto',
-        marginBottom: '10px',
-        background: '#fff',
-        padding: '5px',
-        border: '2px inset #dfdfdf'
-      }}
-    >
-      {messages.map((m, i) => (
-        <div key={i} style={{ marginBottom: 4 }}>
-          <span style={{ color: '#555', marginRight: 6 }}>{m.time}</span>
-          <span
-            style={{
-              fontWeight: 'bold',
-              color: getNameColor(m.username),
-              marginRight: 6
-            }}
-          >
-            {m.username}
-          </span>
-          <span
-            style={{
-              whiteSpace: 'pre-wrap',
-              wordBreak: 'break-word',
-              overflowWrap: 'break-word',
-              display: 'inline-block',
-              maxWidth: '100%'
-            }}
-          >
-            {m.content}
-          </span>
-        </div>
-      ))}
-      <div ref={chatEndRef} />
-    </div>
 
-    <div style={{ display: 'flex', gap: '5px' }}>
-      <TextField
-        value={msg}
-        onChange={(e) => setMsg(e.target.value)}
-        onKeyDown={handleKeyDown}
-        fullWidth
-        disabled={!currentRoom}
-        placeholder={currentRoom ? 'Type a message...' : 'Join a room first...'}
-      />
-      <Button
-        disabled={!currentRoom}
-        onClick={() => {
-          if (msg.trim()) {
-            onSendMessage(msg);
-            setMsg('');
-          }
-        }}
-      >
-        Send
-      </Button>
-    </div>
-  </WindowContent>
-</Window>
+          <Window style={{ width: '100%' }}>
+            <WindowHeader>CHAT</WindowHeader>
+            <WindowContent style={{ height: '400px', display: 'flex', flexDirection: 'column' }}>
+              <div
+                style={{
+                  flex: 1,
+                  overflowY: 'auto',
+                  marginBottom: '10px',
+                  background: '#fff',
+                  padding: '5px',
+                  border: '2px inset #dfdfdf'
+                }}
+              >
+                {messages.map((m, i) => (
+                  <div
+                    key={i}
+                    style={{
+                      marginBottom: 4,
+                      whiteSpace: 'pre-wrap',
+                      wordBreak: 'break-word',
+                      overflowWrap: 'anywhere'
+                    }}
+                  >
+                    <span style={{ color: '#555', marginRight: 6 }}>{m.time}</span>
+                    <span
+                      style={{
+                        fontWeight: 'bold',
+                        color: getNameColor(m.username),
+                        marginRight: 6
+                      }}
+                    >
+                      {m.username}
+                    </span>
+                    <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
+                      {m.content}
+                    </span>
+                  </div>
+                ))}
+                <div ref={chatEndRef} />
+              </div>
+
+              <div style={{ display: 'flex', gap: '5px' }}>
+                <TextField
+                  value={msg}
+                  onChange={(e) => setMsg(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  fullWidth
+                  disabled={!currentRoom}
+                  placeholder={currentRoom ? 'Type a message...' : 'Join a room first...'}
+                />
+                <Button
+                  disabled={!currentRoom}
+                  onClick={() => {
+                    if (msg.trim()) {
+                      onSendMessage(msg);
+                      setMsg('');
+                    }
+                  }}
+                >
+                  Send
+                </Button>
+
+
+                <div
+                  style={{
+                    marginBottom: 8,
+                    position: 'relative',
+                    display: 'inline-block',
+                    alignSelf: 'flex-start'
+                  }}
+                >
+                  <Button
+                    size="sm"
+                    disabled={!currentRoom}
+                    title="Emoji Picker"
+                    onClick={() => setShowEmojiPicker((prev) => !prev)}
+                    style={{
+                      minWidth: 36,
+                      height: 32,
+                      padding: '0 8px',
+                      fontSize: '16px'
+                    }}
+                  >
+                    😊
+                  </Button>
+
+                  {showEmojiPicker && (
+                    <div
+                      style={{
+                        position: 'absolute',
+                        bottom: 0,
+                        right: 'calc(100% + 8px)',
+                        zIndex: 20,
+                        padding: 8,
+                        background: '#c0c0c0',
+                        borderTop: '2px solid #fff',
+                        borderLeft: '2px solid #fff',
+                        borderRight: '2px solid #808080',
+                        borderBottom: '2px solid #808080',
+                        boxShadow: '2px 2px 0 #000',
+                        width: 260,
+                        maxWidth: 'min(260px, calc(100vw - 40px))',
+                        maxHeight: 220,
+                        overflowY: 'auto',
+                        overflowX: 'hidden'
+                      }}
+                    >
+                      <EmojiPicker
+                        disabled={!currentRoom}
+                        onSelect={(emj) => {
+                          if (!currentRoom) return;
+                          setMsg((prev) => prev + emj);
+                        }}
+                      />
+                    </div>
+                  )}
+                </div>
+
+
+              </div>
+            </WindowContent>
+          </Window>
 
           <Window style={{ width: '100%' }}>
             <WindowHeader>SOUNDBOARD</WindowHeader>
             <WindowContent style={{ height: '180px' }}>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px' }}>
-                <Button disabled={!currentRoom} onClick={() => onPlaySound('Error')} style={{ aspectRatio: '1/1', width: '100%' }}>Error</Button>
-                <Button disabled={!currentRoom} onClick={() => onPlaySound('Alert')} style={{ aspectRatio: '1/1', width: '100%' }}>Alert</Button>
-                <Button disabled={!currentRoom} onClick={() => onPlaySound('Ping')} style={{ aspectRatio: '1/1', width: '100%' }}>Ping</Button>
-                <Button disabled={!currentRoom} onClick={() => onPlaySound('Chime')} style={{ aspectRatio: '1/1', width: '100%' }}>Chime</Button>
-                <Button disabled={!currentRoom} onClick={() => onPlaySound('Buzz')} style={{ aspectRatio: '1/1', width: '100%' }}>Buzz</Button>
-                <Button disabled={!currentRoom} onClick={() => onPlaySound('Pop')} style={{ aspectRatio: '1/1', width: '100%' }}>Pop</Button>
+                <Button disabled={!currentRoom} onClick={() => onPlaySound('airhorn')} style={{ aspectRatio: '1/1', width: '100%' }}>Airhorn</Button>
+                <Button disabled={!currentRoom} onClick={() => onPlaySound('america_ya')} style={{ aspectRatio: '1/1', width: '100%' }}>America 🇺🇸</Button>
+                <Button disabled={!currentRoom} onClick={() => onPlaySound('bahbuy')} style={{ aspectRatio: '1/1', width: '100%' }}>Bahbuy</Button>
+                <Button disabled={!currentRoom} onClick={() => onPlaySound('ello')} style={{ aspectRatio: '1/1', width: '100%' }}>Ello 👋</Button>
+                <Button disabled={!currentRoom} onClick={() => onPlaySound('fah')} style={{ aspectRatio: '1/1', width: '100%' }}>Fahhh 🥀</Button>
+                <Button disabled={!currentRoom} onClick={() => onPlaySound('gya')} style={{ aspectRatio: '1/1', width: '100%' }}>GYAHA 🫵🤣</Button>
+                <Button disabled={!currentRoom} onClick={() => onPlaySound('hahaha')} style={{ aspectRatio: '1/1', width: '100%' }}>Hahaha</Button>
+                <Button disabled={!currentRoom} onClick={() => onPlaySound('i')} style={{ aspectRatio: '1/1', width: '100%' }}>HI 😺</Button>
+                <Button disabled={!currentRoom} onClick={() => onPlaySound('nasty_fart')} style={{ aspectRatio: '1/1', width: '100%' }}>NASTY 🤢🛢️</Button>
+                <Button disabled={!currentRoom} onClick={() => onPlaySound('nou')} style={{ aspectRatio: '1/1', width: '100%' }}>Nouuuu</Button>
+                <Button disabled={!currentRoom} onClick={() => onPlaySound('og_fart')} style={{ aspectRatio: '1/1', width: '100%' }}>FORT 🏃‍♂️💨</Button>
+                <Button disabled={!currentRoom} onClick={() => onPlaySound('onou')} style={{ aspectRatio: '1/1', width: '100%' }}>ounou 🫢</Button>
+
+
+
               </div>
             </WindowContent>
           </Window>
-          
+
         </div>
       </div>
     </div>
